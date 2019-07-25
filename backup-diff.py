@@ -182,7 +182,7 @@ class BackupDiff:
 			raise Exception("Root dir wasn't found at the beginning of path", str(root_dir), str(path))
 		
 		#
-		path_stripped = path[ len(root_dir) + 1 : ]
+		path_stripped = path[len(root_dir) + 1:]
 		# print(path, "===>", path_stripped)
 		
 		return path_stripped
@@ -212,9 +212,9 @@ class BackupDiff:
 		# Compare props
 		else:
 			
-			print("Received item:", comparison_item)
-			print("Comparing props with:", path_source)
-			print("Comparing props with:", path_backup)
+			# print("Received item:", comparison_item)
+			# print("Comparing props with:", path_source)
+			# print("Comparing props with:", path_backup)
 			
 			path_source_mtime = int(os.path.getmtime(path_source))
 			path_backup_mtime = int(os.path.getmtime(path_backup))
@@ -222,18 +222,18 @@ class BackupDiff:
 			path_source_size = os.path.getsize(path_source)
 			path_backup_size = os.path.getsize(path_backup)
 			
+			# Different file sizes
+			if os.path.isfile(path_source) \
+				and os.path.isfile(path_backup) \
+				and (path_source_size != path_backup_size):
+				entry.set_is_different_sizes(path_source_size, path_backup_size)
+			
 			# Source modification time is newer
-			if path_source_mtime > path_backup_mtime:
+			elif path_source_mtime > path_backup_mtime:
 				entry.set_source_is_newer(path_source_mtime, path_backup_mtime)
 			# Backup modification time is newer
 			elif path_backup_mtime > path_source_mtime:
 				entry.set_backup_is_newer(path_source_mtime, path_backup_mtime)
-			
-			# Different file sizes
-			elif os.path.isfile(path_source) \
-				and os.path.isfile(path_backup) \
-				and (path_source_size != path_backup_size):
-				entry.set_different_sizes(path_source_size, path_backup_size)
 			
 			# No difference
 			else:
@@ -241,11 +241,105 @@ class BackupDiff:
 		
 		return entry
 	
-	def print_report(self):
-	
+	def generate_report(self):
+		
+		# Start report structure
+		report = {
+			"missing_from_source": {
+				"label": "Items missing from the source",
+				"entries": []
+			},
+			"missing_from_backup": {
+				"label": "Items missing from the backup",
+				"entries": []
+			},
+			"newer_source": {
+				"label": "Items newer in the source",
+				"entries": []
+			},
+			"newer_backup": {
+				"label": "Items newer in the backup",
+				"entries": []
+			},
+			"type_mismatch": {
+				"label": "Directory/File type mismatch",
+				"entries": []
+			},
+			"size_difference": {
+				"label": "Items with different file sizes",
+				"entries": []
+			}
+		}
+		
+		# Find entries missing from source
 		for entry in self.__difference_entries:
-			print(entry)
-			print("")
+			if entry.get_is_missing_from_source():
+				report["missing_from_source"]["entries"].append(entry)
+		
+		# Find entries missing from backup
+		for entry in self.__difference_entries:
+			if entry.get_is_missing_from_backup():
+				report["missing_from_backup"]["entries"].append(entry)
+		
+		# Find directory/file type mismatches
+		for entry in self.__difference_entries:
+			if entry.get_is_type_mismatch():
+				report["type_mismatch"]["entries"].append(entry)
+				
+		# Find newer in source
+		for entry in self.__difference_entries:
+			if entry.get_source_is_newer():
+				report["newer_source"]["entries"].append(entry)
+				
+		# Find newer in backup
+		for entry in self.__difference_entries:
+			if entry.get_backup_is_newer():
+				report["newer_backup"]["entries"].append(entry)
+		
+		# Different file sizes
+		for entry in self.__difference_entries:
+			if entry.get_is_different_sizes():
+				report["size_difference"]["entries"].append(entry)
+		
+		return report
+	
+	@staticmethod
+	def print_report_heading(s, hooded: bool=False):
+		
+		title = "***** " + s + "*****"
+		
+		print("")
+		if hooded:
+			print( "*" * len(title) )
+		print(title)
+	
+	def print_report(self):
+		
+		report = self.generate_report()
+		section_order = [
+			"type_mismatch",
+			"missing_from_source", "newer_source",
+			"missing_from_backup", "newer_backup",
+			"size_difference"
+		]
+		
+		#
+		self.print_report_heading("Mike's Backup Diff Report", True)
+		print("Source:", self.__source_path)
+		print("Backup:", self.__backup_path)
+		
+		#
+		found_anything = False
+		for section_key in section_order:
+			if len(report[section_key]["entries"]):
+				found_anything = True
+				self.print_report_heading(report[section_key]["label"])
+				for entry in report[section_key]["entries"]:
+					print(entry.get_item())
+				print("")
+		
+		if not found_anything:
+			print("Everything seems to match")
 
 
 #
@@ -256,6 +350,13 @@ class DifferenceEntry:
 		self.__item = None
 		self.__type = None
 		self.__message = None
+		
+		self.CONST_TYPE_TYPE_MISMATCH = "type_mismatch"
+		self.CONST_TYPE_MISSING_IN_SOURCE = "missing_in_source"
+		self.CONST_TYPE_MISSING_IN_BACKUP = "missing_in_backup"
+		self.CONST_TYPE_SOURCE_IS_NEWER = "source_is_newer"
+		self.CONST_TYPE_BACKUP_IS_NEWER = "backup_is_newer"
+		self.CONST_TYPE_DIFFERENT_SIZES = "different_sizes"
 		
 		if item:
 			self.set_item(item)
@@ -275,39 +376,61 @@ class DifferenceEntry:
 		
 		self.__item = i
 	
+	def get_item(self):
+		
+		return self.__item
+	
 	def set_is_type_mismatch(self, message):
 		
-		self.__type = "type_mismatch"
+		self.__type = self.CONST_TYPE_TYPE_MISMATCH
 		self.__message = message
+	
+	def get_is_type_mismatch(self):
+		return self.__type == self.CONST_TYPE_TYPE_MISMATCH
 	
 	def set_is_missing_from_source(self):
 		
-		self.__type = "missing_in_source"
+		self.__type = self.CONST_TYPE_MISSING_IN_SOURCE
 		self.__message = "Item is in backup but not in source"
 	
+	def get_is_missing_from_source(self):
+		return self.__type == self.CONST_TYPE_MISSING_IN_SOURCE
+	
 	def set_is_missing_from_backup(self):
-		self.__type = "missing_in_backup"
+		self.__type = self.CONST_TYPE_MISSING_IN_BACKUP
 		self.__message = "Item is in source but not in backup"
+	
+	def get_is_missing_from_backup(self):
+		return self.__type == self.CONST_TYPE_MISSING_IN_BACKUP
 	
 	def set_source_is_newer(self, stamp_source, stamp_backup):
 		time_difference = self.friendly_time_difference(stamp_source, stamp_backup)
-		self.__type = "source_is_newer"
+		self.__type = self.CONST_TYPE_SOURCE_IS_NEWER
 		self.__message = "Item has been modified more recently in source (" + str(stamp_source) + ")" \
 			+ " than in backup (" + str(stamp_backup) + ")" \
 			+ "; Difference is " + str(time_difference)
 	
+	def get_source_is_newer(self):
+		return self.__type == self.CONST_TYPE_SOURCE_IS_NEWER
+	
 	def set_backup_is_newer(self, stamp_source, stamp_backup):
 		time_difference = self.friendly_time_difference(stamp_source, stamp_backup)
-		self.__type = "backup_is_newer"
+		self.__type = self.CONST_TYPE_BACKUP_IS_NEWER
 		self.__message = "Item has been modified more recently in backup (" + str(stamp_backup) + ")" \
 			+ " than in source (" + str(stamp_source) + ")" \
 			+ "; Difference is " + str(time_difference)
 	
-	def set_different_sizes(self, source_item_size, backup_item_size):
-		self.__type = "different_sizes"
+	def get_backup_is_newer(self):
+		return self.__type == self.CONST_TYPE_BACKUP_IS_NEWER
+	
+	def set_is_different_sizes(self, source_item_size, backup_item_size):
+		self.__type = self.CONST_TYPE_DIFFERENT_SIZES
 		self.__message = \
 			"Source has a file size of " + str(source_item_size) \
 			+ ", but backup has a file size of " + str(backup_item_size)
+	
+	def get_is_different_sizes(self):
+		return self.__type == self.CONST_TYPE_DIFFERENT_SIZES
 	
 	@staticmethod
 	def friendly_time_difference(stamp1, stamp2):
