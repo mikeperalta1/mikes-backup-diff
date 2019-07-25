@@ -37,7 +37,7 @@ class BackupDiff:
 		
 		self.consume_arguments()
 		self.calculate_comparison_items()
-		self.do_comparison()
+		self.calculate_difference_entries()
 		self.print_report()
 	
 	@staticmethod
@@ -134,7 +134,7 @@ class BackupDiff:
 		
 		return paths
 	
-	def do_comparison(self):
+	def calculate_difference_entries(self):
 		
 		entries = []
 		
@@ -310,7 +310,7 @@ class BackupDiff:
 		
 		print("")
 		if hooded:
-			print( "*" * len(title) )
+			print("*" * len(title))
 		print(title)
 	
 	def print_report(self):
