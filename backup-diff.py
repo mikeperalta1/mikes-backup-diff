@@ -107,6 +107,8 @@ class BackupDiff:
 		source_path_items = self.consume_dir(self.__source_path)
 		source_path_items = self.strip_root_dir(self.__source_path, source_path_items)
 		
+		self.log("Consumed source path items: " + str(len(source_path_items)))
+		
 		self.__source_path_items = source_path_items
 	
 	def consume_backup_path(self):
@@ -119,15 +121,17 @@ class BackupDiff:
 		backup_path_items = self.consume_dir(self.__backup_path)
 		backup_path_items = self.strip_root_dir(self.__backup_path, backup_path_items)
 		
+		self.log("Consumed backup path items: " + str(len(backup_path_items)))
+		
 		self.__backup_path_items = backup_path_items
 	
-	@staticmethod
-	def consume_dir(dir_path):
+	def consume_dir(self, dir_path):
 		
 		#
 		paths = set()
 		
 		#
+		self.log("")
 		for root, dirs, filenames in os.walk(dir_path):
 			
 			paths.add(root)
@@ -141,6 +145,8 @@ class BackupDiff:
 				path = os.path.join(root, f)
 				paths.add(path)
 				# print(path)
+			
+			self.print_progress_message("Consuming paths ... " + str(len(paths)))
 		
 		return paths
 	
@@ -149,20 +155,38 @@ class BackupDiff:
 		entries = []
 		
 		# Compare everything in the source path
+		self.log("")
+		i = 1
 		for item in self.__source_path_items:
+			
+			self.print_progress_message(
+				"Looking for differences from source to backup ... "
+				+ str(i) + " of " + str(len(self.__source_path_items))
+			)
 			
 			entry = self.calculate_difference_entry(item)
 			if entry:
 				entries.append(entry)
+			
+			i += 1
 		
 		# Compare only things in the backup path that weren't
 		# in the source
+		self.log("")
+		i = 1
 		backup_items_not_in_source = self.__backup_path_items - self.__source_path_items
 		for item in backup_items_not_in_source:
+			
+			self.print_progress_message(
+				"Looking for differences from backup to source ... "
+				+ str(i) + " of " + str(len(backup_items_not_in_source))
+			)
 			
 			entry = self.calculate_difference_entry(item)
 			if entry:
 				entries.append(entry)
+			
+			i += 1
 		
 		self.__difference_entries = entries
 	
@@ -170,6 +194,8 @@ class BackupDiff:
 		
 		if entries is None:
 			entries = self.__difference_entries
+		
+		self.log("Cleaning difference entries")
 		
 		# Build a temp list of all known difference entries
 		temp_entries = []
@@ -281,17 +307,42 @@ class BackupDiff:
 		entry = DifferenceEntry(comparison_item)
 		
 		path_source = os.path.join(self.__source_path, comparison_item)
+		path_source_exists = False
+		path_source_is_dir = None
+		path_source_mtime = None
+		try:
+			path_source_is_dir = os.path.isdir(path_source)
+			path_source_mtime = int(os.path.getmtime(path_source))
+			path_source_exists = True
+		except FileNotFoundError:
+			pass
+		
 		path_backup = os.path.join(self.__backup_path, comparison_item)
+		path_backup_exists = False
+		path_backup_is_dir = None
+		path_backup_mtime = None
+		try:
+			path_backup_is_dir = os.path.isdir(path_backup)
+			path_backup_mtime = int(os.path.getmtime(path_backup))
+			path_backup_exists = True
+		except FileNotFoundError:
+			pass
 		
 		# In source but not backup
-		if os.path.exists(path_source) and not os.path.exists(path_backup):
-			entry.set_is_dir(os.path.isdir(path_source))
+		if path_source_exists and not path_backup_exists:
+			if path_source_is_dir is not None:
+				entry.set_is_dir(path_source_is_dir)
 			entry.set_is_missing_from_backup()
 			
 		# In backup but not source
-		elif os.path.exists(path_backup) and not os.path.exists(path_source):
-			entry.set_is_dir(os.path.isdir(path_backup))
+		elif path_backup_exists and not path_source_exists:
+			entry.set_is_dir(path_backup_is_dir)
 			entry.set_is_missing_from_source()
+		
+		# In neither
+		# Possible if a bad symlink is present
+		elif not path_source_exists and not path_backup_exists:
+			entry.set_is_missing_from_both()
 		
 		# Type mismatch
 		elif os.path.isdir(path_source) and os.path.isfile(path_backup):
@@ -305,9 +356,6 @@ class BackupDiff:
 			# print("Received item:", comparison_item)
 			# print("Comparing props with:", path_source)
 			# print("Comparing props with:", path_backup)
-			
-			path_source_mtime = int(os.path.getmtime(path_source))
-			path_backup_mtime = int(os.path.getmtime(path_backup))
 			
 			path_source_size = os.path.getsize(path_source)
 			path_backup_size = os.path.getsize(path_backup)
@@ -333,7 +381,8 @@ class BackupDiff:
 		
 		return entry
 	
-	def sort_difference_entries(self, entries):
+	@staticmethod
+	def sort_difference_entries(entries):
 		
 		entries.sort(
 			key=functools.cmp_to_key(
@@ -371,6 +420,10 @@ class BackupDiff:
 				"label": "Items missing from the backup",
 				"entries": []
 			},
+			"missing_from_both": {
+				"label": "Items missing from both source and backup (bad link?)",
+				"entries": []
+			},
 			"newer_source": {
 				"label": "Items newer in the source",
 				"entries": []
@@ -399,6 +452,11 @@ class BackupDiff:
 			if entry.get_is_missing_from_backup():
 				report["missing_from_backup"]["entries"].append(entry)
 		
+		# Find entries missing from both
+		for entry in self.__difference_entries:
+			if entry.get_is_missing_from_both():
+				report["missing_from_both"]["entries"].append(entry)
+		
 		# Find directory/file type mismatches
 		for entry in self.__difference_entries:
 			if entry.get_is_type_mismatch():
@@ -426,9 +484,19 @@ class BackupDiff:
 		return report
 	
 	@staticmethod
+	def print_progress_message(s):
+		
+		sys.stdout.write("\033[F")  # back to previous line
+		sys.stdout.write("\033[K")  # clear line
+		print(s)
+	
+	@staticmethod
 	def print_report_heading(s, hooded: bool=False):
 		
-		title = "***** " + s + "*****"
+		star_count = 5
+		stars = "*" * star_count
+		
+		title = stars + " " + s + " " + stars
 		
 		print("")
 		if hooded:
@@ -440,6 +508,7 @@ class BackupDiff:
 		report = self.generate_report()
 		section_order = [
 			"type_mismatch",
+			"missing_from_both",
 			"missing_from_source", "newer_source",
 			"missing_from_backup", "newer_backup",
 			"size_difference"
@@ -487,6 +556,7 @@ class DifferenceEntry:
 		self.CONST_TYPE_TYPE_MISMATCH = "type_mismatch"
 		self.CONST_TYPE_MISSING_IN_SOURCE = "missing_in_source"
 		self.CONST_TYPE_MISSING_IN_BACKUP = "missing_in_backup"
+		self.CONST_TYPE_MISSING_IN_BOTH = "missing_in_both"
 		self.CONST_TYPE_SOURCE_IS_NEWER = "source_is_newer"
 		self.CONST_TYPE_BACKUP_IS_NEWER = "backup_is_newer"
 		self.CONST_TYPE_DIFFERENT_SIZES = "different_sizes"
@@ -556,6 +626,13 @@ class DifferenceEntry:
 	
 	def get_is_missing_from_backup(self):
 		return self.__type == self.CONST_TYPE_MISSING_IN_BACKUP
+	
+	def set_is_missing_from_both(self):
+		self.__type = self.CONST_TYPE_MISSING_IN_BOTH
+		self.__message = "Item isn't in source or backup (bad link?)"
+	
+	def get_is_missing_from_both(self):
+		return self.__type == self.CONST_TYPE_MISSING_IN_BOTH
 	
 	def set_source_is_newer(self, stamp_source, stamp_backup):
 		time_difference = self.friendly_time_difference(stamp_source, stamp_backup)
