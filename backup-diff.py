@@ -32,12 +32,17 @@ class BackupDiff:
 		self.__backup_path_items = None
 		
 		self.__difference_entries = None
+		self.__do_clean_difference_entries = True
 		
 	def run(self):
 		
 		self.consume_arguments()
 		self.calculate_comparison_items()
 		self.calculate_difference_entries()
+		
+		if self.__do_clean_difference_entries:
+			self.clean_difference_entries()
+		
 		self.print_report()
 	
 	@staticmethod
@@ -72,6 +77,9 @@ class BackupDiff:
 				i, one_path = self.consume_argument_companion(i)
 				self.__backup_path = os.path.abspath(one_path)
 				self.log("Found backup destination path argument:", self.__backup_path)
+			
+			elif arg == "--no-clean":
+				self.__do_clean_difference_entries = False
 	
 	@staticmethod
 	def consume_argument_companion(arg_index):
@@ -156,6 +164,84 @@ class BackupDiff:
 		
 		self.__difference_entries = entries
 	
+	def clean_difference_entries(self, entries: list=None):
+		
+		if entries is None:
+			entries = self.__difference_entries
+		
+		# Build a temp list of all known difference entries
+		temp_entries = []
+		for entry in entries:
+			temp_entries.append(entry)
+		# print("Temp entries count:", len(temp_entries))
+		
+		# Loop through entries, attempting to clean for one at a time,
+		# until no cleaning has been done
+		while True:
+			
+			most_shallow_entry = None
+			
+			# Locate the most shallow entry
+			for entry in temp_entries:
+				
+				if entry.get_is_missing_from_source() or entry.get_is_missing_from_backup():
+					
+					# print("Found entry of type 'missing'")
+					# print(entry)
+					
+					item = entry.get_item()
+					if entry.get_is_dir():
+						# print("Found entry dir:", item)
+						if most_shallow_entry is None or len(item) < len(most_shallow_entry.get_item()):
+							most_shallow_entry = entry
+							# print("Found shallow entry:")
+							# print(entry)
+			
+			# Finish if we haven't found anything
+			if not most_shallow_entry:
+				break
+			
+			# Remove this entry from the temp list, and clean with it as root
+			temp_entries.remove(most_shallow_entry)
+			self.clean_child_difference_entries(entries, most_shallow_entry)
+	
+	def clean_child_difference_entries(self, entries: list, root_entry):
+		
+		if entries is None:
+			entries = self.__difference_entries
+		
+		# print("Enter clean_child_difference_entries")
+		# print(root_entry)
+		
+		root_entry_item = root_entry.get_item()
+		
+		entries_to_delete = []
+		
+		# Check every other entry as a possible child of the root
+		for child_entry in entries:
+			
+			if child_entry != root_entry:
+				
+				child_entry_item = child_entry.get_item()
+				
+				# Entry must be longer than the shallow entry
+				if len(child_entry_item) >= len(root_entry_item):
+					
+					# Entry must begin with the shallow entry (ie shallow must be a root path of deeper)
+					if child_entry_item.find(root_entry_item) == 0:
+						
+						# We can purge the deeper entry
+						entries_to_delete.append(child_entry)
+						# print("Deleting unneeded child entry:")
+						# print("> Root:", root_entry_item)
+						# print("> Child:", child_entry_item)
+		
+		# Handle entries to delete
+		for entry in entries_to_delete:
+			entries.remove(entry)
+		
+		return len(entries_to_delete) > 0
+	
 	def strip_root_dir(self, root_dir, paths: set):
 		
 		if isinstance(paths, str):
@@ -197,10 +283,12 @@ class BackupDiff:
 		
 		# In source but not backup
 		if os.path.exists(path_source) and not os.path.exists(path_backup):
+			entry.set_is_dir(os.path.isdir(path_source))
 			entry.set_is_missing_from_backup()
 			
 		# In backup but not source
 		elif os.path.exists(path_backup) and not os.path.exists(path_source):
+			entry.set_is_dir(os.path.isdir(path_backup))
 			entry.set_is_missing_from_source()
 		
 		# Type mismatch
@@ -221,6 +309,8 @@ class BackupDiff:
 			
 			path_source_size = os.path.getsize(path_source)
 			path_backup_size = os.path.getsize(path_backup)
+			
+			entry.set_is_dir(os.path.isdir(path_source))
 			
 			# Different file sizes
 			if os.path.isfile(path_source) \
@@ -312,7 +402,7 @@ class BackupDiff:
 		if hooded:
 			print("*" * len(title))
 		print(title)
-	
+		
 	def print_report(self):
 		
 		report = self.generate_report()
@@ -328,14 +418,23 @@ class BackupDiff:
 		print("Source:", self.__source_path)
 		print("Backup:", self.__backup_path)
 		
-		#
+		# Print each non-empty report section
 		found_anything = False
 		for section_key in section_order:
 			if len(report[section_key]["entries"]):
 				found_anything = True
 				self.print_report_heading(report[section_key]["label"])
 				for entry in report[section_key]["entries"]:
-					print(entry.get_item())
+					
+					if entry.get_is_dir():
+						prefix = "Directory: "
+					elif entry.get_is_file():
+						prefix = "File: "
+					else:
+						prefix = ""
+					
+					print(prefix + entry.get_item())
+					
 				print("")
 		
 		if not found_anything:
@@ -348,6 +447,8 @@ class DifferenceEntry:
 	def __init__(self, item):
 		
 		self.__item = None
+		self.__item_is_file = None
+		self.__item_is_dir = None
 		self.__type = None
 		self.__message = None
 		
@@ -379,6 +480,27 @@ class DifferenceEntry:
 	def get_item(self):
 		
 		return self.__item
+	
+	def set_is_dir(self, is_dir: bool=True):
+		
+		if is_dir:
+			self.__item_is_dir = True
+			self.__item_is_file = False
+		else:
+			self.__item_is_dir = False
+			self.__item_is_file = True
+	
+	def get_is_dir(self):
+		
+		return self.__item_is_dir
+	
+	def set_is_file(self, is_file: bool=True):
+		
+		self.set_is_dir( not is_file)
+	
+	def get_is_file(self):
+		
+		return self.__item_is_file
 	
 	def set_is_type_mismatch(self, message):
 		
