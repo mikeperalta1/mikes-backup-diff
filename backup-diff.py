@@ -104,10 +104,12 @@ class BackupDiff:
 		if not os.path.isdir(self.__source_path):
 			raise Exception("Source path isn't a valid directory")
 		
+		self.log("Consuming source path: " + str(self.__source_path))
+		
 		source_path_items = self.consume_dir(self.__source_path)
 		source_path_items = self.strip_root_dir(self.__source_path, source_path_items)
 		
-		self.log("Consumed source path items: " + str(len(source_path_items)))
+		self.log("Done consuming source path items: " + str(len(source_path_items)))
 		
 		self.__source_path_items = source_path_items
 	
@@ -118,10 +120,12 @@ class BackupDiff:
 		if not os.path.isdir(self.__backup_path):
 			raise Exception("Backup destination path isn't a valid directory")
 		
+		self.log("Consuming backup path: " + str(self.__backup_path))
+		
 		backup_path_items = self.consume_dir(self.__backup_path)
 		backup_path_items = self.strip_root_dir(self.__backup_path, backup_path_items)
 		
-		self.log("Consumed backup path items: " + str(len(backup_path_items)))
+		self.log("Done consuming backup path items: " + str(len(backup_path_items)))
 		
 		self.__backup_path_items = backup_path_items
 	
