@@ -15,6 +15,7 @@ Released under the GNU GENERAL PUBLIC LICENSE v3 (See LICENSE file for more)
 
 #
 import datetime
+import functools
 import humanfriendly
 import os
 import sys
@@ -80,6 +81,7 @@ class BackupDiff:
 			
 			elif arg == "--no-clean":
 				self.__do_clean_difference_entries = False
+				self.log("Won't clean Difference entries")
 	
 	@staticmethod
 	def consume_argument_companion(arg_index):
@@ -331,6 +333,32 @@ class BackupDiff:
 		
 		return entry
 	
+	def sort_difference_entries(self, entries):
+		
+		entries.sort(
+			key=functools.cmp_to_key(
+				lambda entry_a, entry_b: BackupDiff.sort_difference_entries_key_callback(entry_a, entry_b)
+			)
+		)
+	
+	@staticmethod
+	def sort_difference_entries_key_callback(entry_a, entry_b):
+		
+		if entry_a.get_is_dir() and not entry_b.get_is_dir():
+			return -1
+		if not entry_a.get_is_dir() and entry_b.get_is_dir():
+			return 1
+		
+		item_a = entry_a.get_item()
+		item_b = entry_b.get_item()
+		
+		if item_a > item_b:
+			return -1
+		elif item_b > item_b:
+			return 1
+		
+		return 0
+	
 	def generate_report(self):
 		
 		# Start report structure
@@ -390,6 +418,10 @@ class BackupDiff:
 		for entry in self.__difference_entries:
 			if entry.get_is_different_sizes():
 				report["size_difference"]["entries"].append(entry)
+		
+		# Sort all entries
+		for section_key in report:
+			self.sort_difference_entries(report[section_key]["entries"])
 		
 		return report
 	
@@ -496,7 +528,7 @@ class DifferenceEntry:
 	
 	def set_is_file(self, is_file: bool=True):
 		
-		self.set_is_dir( not is_file)
+		self.set_is_dir(not is_file)
 	
 	def get_is_file(self):
 		
