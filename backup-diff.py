@@ -280,14 +280,17 @@ class BackupDiff:
 			# Missing from backup
 			if change_type_character == "<":
 				entry.set_is_missing_from_backup()
-			
-			# Missing from source
+			# Missing from ... backup? (confusing symbolstuffs)
 			elif change_type_character == ">":
-				entry.set_is_missing_from_source()
+				entry.set_is_missing_from_backup()
 			
 			# Local change is occurring
 			elif change_type_character == "c":
-				entry.set_is_unknown("Rsync says a local change is occurring")
+				entry.set_is_missing_from_backup()
+			
+			# Different attributes
+			elif different_any_attribute:
+				entry.set_is_different_attributes()
 			
 			# Item is a hard link
 			elif change_type_character == "h":
@@ -699,6 +702,10 @@ class BackupDiff:
 				"label": "Items with different file sizes",
 				"entries": []
 			},
+			"different_attributes": {
+				"label": "Items with different attributes",
+				"entries": []
+			},
 			"unknown": {
 				"label": "Differences of an unknown type",
 				"entries": []
@@ -739,6 +746,11 @@ class BackupDiff:
 		for entry in self.__difference_entries:
 			if entry.get_is_different_sizes():
 				report["size_difference"]["entries"].append(entry)
+				
+		# Different attributes
+		for entry in self.__difference_entries:
+			if entry.get_is_different_attributes():
+				report["different_attributes"]["entries"].append(entry)
 		
 		# Differences of an unknown nature
 		for entry in self.__difference_entries:
@@ -780,6 +792,7 @@ class BackupDiff:
 			"missing_from_source", "newer_source",
 			"missing_from_backup", "newer_backup",
 			"size_difference",
+			"different_attributes",
 			"unknown"
 		]
 		
@@ -829,6 +842,7 @@ class DifferenceEntry:
 		self.CONST_TYPE_SOURCE_IS_NEWER = "source_is_newer"
 		self.CONST_TYPE_BACKUP_IS_NEWER = "backup_is_newer"
 		self.CONST_TYPE_DIFFERENT_SIZES = "different_sizes"
+		self.CONST_TYPE_DIFFERENT_ATTRIBUTES = "different_attributes"
 		self.CONST_TYPE_UNKNOWN = "unknown"
 		
 		if item:
@@ -932,6 +946,13 @@ class DifferenceEntry:
 	
 	def get_is_different_sizes(self):
 		return self.__type == self.CONST_TYPE_DIFFERENT_SIZES
+	
+	def set_is_different_attributes(self, message=None):
+		self.__type = self.CONST_TYPE_DIFFERENT_ATTRIBUTES
+		self.__message = message
+	
+	def get_is_different_attributes(self):
+		return self.__type == self.CONST_TYPE_DIFFERENT_ATTRIBUTES
 	
 	def set_is_unknown(self, message):
 		self.__type = self.CONST_TYPE_UNKNOWN
