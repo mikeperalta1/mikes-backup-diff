@@ -18,6 +18,8 @@ import datetime
 import functools
 import humanfriendly
 import os
+import re
+import subprocess
 import sys
 
 
@@ -27,7 +29,14 @@ class BackupDiff:
 	def __init__(self):
 		
 		self.__source_path = None
+		self.__source_ssh_host = None
+		self.__source_ssh_user = None
+		
 		self.__backup_path = None
+		self.__backup_ssh_host = None
+		self.__backup_ssh_user = None
+		
+		self.__ssh_key = None
 		
 		self.__source_path_items = None
 		self.__backup_path_items = None
@@ -35,10 +44,12 @@ class BackupDiff:
 		self.__difference_entries = None
 		self.__do_clean_difference_entries = True
 		
+		self.__force_rsync = False
+		
 	def run(self):
 		
 		self.consume_arguments()
-		self.calculate_comparison_items()
+		
 		self.calculate_difference_entries()
 		
 		if self.__do_clean_difference_entries:
@@ -74,10 +85,39 @@ class BackupDiff:
 				self.__source_path = os.path.abspath(one_path)
 				self.log("Found source path argument:", self.__source_path)
 			
+			elif arg == "--source-remote-host":
+				i, host = self.consume_argument_companion(i)
+				self.__source_ssh_host = host
+				self.log("Will use source remote host: " + str(self.__source_ssh_host))
+			
+			elif arg == "--source-remote-user":
+				i, user = self.consume_argument_companion(i)
+				self.__source_ssh_user = user
+				self.log("Will use source remote user: " + str(self.__source_ssh_user))
+			
 			elif arg == "--backup-path":
 				i, one_path = self.consume_argument_companion(i)
 				self.__backup_path = os.path.abspath(one_path)
 				self.log("Found backup destination path argument:", self.__backup_path)
+			
+			elif arg == "--backup-remote-host":
+				i, host = self.consume_argument_companion(i)
+				self.__backup_ssh_host = host
+				self.log("Will use backup remote host: " + str(self.__backup_ssh_host))
+			
+			elif arg == "--backup-remote-user":
+				i, user = self.consume_argument_companion(i)
+				self.__backup_ssh_user = user
+				self.log("Will use backup remote user: " + str(self.__backup_ssh_user))
+			
+			elif arg == "--ssh-key":
+				i, key = self.consume_argument_companion(i)
+				self.__ssh_key = key
+				self.log("Will use ssh key: " + str(self.__ssh_key))
+			
+			elif arg == "--use-rsync" or arg == "--rsync":
+				self.__force_rsync = True
+				self.log("Forcing comparison with rsync tool")
 			
 			elif arg == "--no-clean":
 				self.__do_clean_difference_entries = False
@@ -112,6 +152,22 @@ class BackupDiff:
 		self.log("Done consuming source path items: " + str(len(source_path_items)))
 		
 		self.__source_path_items = source_path_items
+	
+	def should_use_rsync(self):
+		
+		if self.__force_rsync:
+			return True
+		
+		if self.__source_ssh_host or self.__source_ssh_user:
+			return True
+		
+		if self.__backup_ssh_host or self.__backup_ssh_user:
+			return True
+		
+		if self.__ssh_key:
+			return True
+		
+		return False
 	
 	def consume_backup_path(self):
 		
@@ -155,6 +211,205 @@ class BackupDiff:
 		return paths
 	
 	def calculate_difference_entries(self):
+	
+		if self.should_use_rsync():
+			self.calculate_difference_entries_with_rsync()
+		else:
+			self.calculate_difference_entries_directly()
+	
+	def calculate_difference_entries_with_rsync(self):
+		
+		entries = []
+		
+		do_test = False
+		
+		stdout, stderr, return_code = self.execute_rsync()
+		
+		print("STDOUT:")
+		print(stdout)
+		
+		#print("STDERR:")
+		#print(stderr)
+		
+		#
+		print("Calculating difference entries ...")
+		
+		# Parse normal lines (Flags and Path)
+		pattern_general = re.compile("""^(?P<line>(?P<flags>[^\s]{11})(?P<item>.*))$""", re.MULTILINE)
+		matches = pattern_general.finditer(stdout)
+		for match in matches:
+			
+			line = match.group("line")
+			
+			flags = match.group("flags")
+			change_type_character = flags[0]
+			item_type = flags[1]
+			
+			# Determine which attributes are different
+			attributes_part = flags[2:]
+			different_checksum = "c" in attributes_part
+			different_size = "s" in attributes_part
+			different_modification_time = "t" in attributes_part
+			different_permissions = "p" in attributes_part
+			different_owner = "o" in attributes_part
+			different_group = "g" in attributes_part
+			different_acl = "a" in attributes_part
+			different_extended_attributes = "x" in attributes_part
+			#
+			different_any_attribute = (
+				different_checksum
+				or different_size
+				or different_modification_time
+				or different_permissions
+				or different_owner
+				or different_group
+				or different_acl
+				or different_extended_attributes
+			)
+			
+			item = match.group("item").strip()
+			
+			entry = DifferenceEntry(item)
+			
+			# File folder, whatever
+			if item_type == "d":
+				entry.set_is_dir()
+			elif item_type == "f":
+				entry.set_is_file()
+			
+			# Missing from backup
+			if change_type_character == "<":
+				entry.set_is_missing_from_backup()
+			
+			# Missing from source
+			elif change_type_character == ">":
+				entry.set_is_missing_from_source()
+			
+			# Local change is occurring
+			elif change_type_character == "c":
+				entry.set_is_unknown("Rsync says a local change is occurring")
+			
+			# Item is a hard link
+			elif change_type_character == "h":
+				entry.set_is_unknown("Rsync says this is a hard link")
+			
+			# "no change / transfer (could still be changing attributes)"
+			elif change_type_character == ".":
+				entry.set_is_unknown("Rsync says no change, but could be changing attributes")
+			
+			#
+			entries.append(entry)
+		
+		# Parse message lines
+		pattern_messages = re.compile("""^(?P<line>\*(?P<message>[\w]+)(?P<item>.*))$""", re.MULTILINE)
+		matches = pattern_messages.finditer(stdout)
+		for match in matches:
+			
+			message = match.group("message").strip()
+			item = match.group("item").strip()
+			
+			entry = DifferenceEntry(item)
+			
+			if message == "deleting":
+				entry.set_is_missing_from_source()
+				entry.set_is_dir(item[-1] == "/")
+				entry.set_is_file(not item[-1] == "/")
+			
+			else:
+				print("IS UNKNOWN MESSAGE:", message)
+				entry.set_is_unknown("Unhandled message: " + message)
+			
+			entries.append(entry)
+		
+		print("Finished calculating difference entries")
+		
+		self.__difference_entries = entries
+	
+	def execute_rsync(self):
+		
+		#
+		args = list()
+		
+		# Rsync
+		args.append("rsync")
+		
+		# Dry run!!
+		args.append("--dry-run")
+		
+		# Produces the main output we'll parse
+		args.append("--itemize-changes")
+		
+		# Rsh command
+		rsh_command = self.make_rsync_rsh_argument(self.__ssh_key)
+		if rsh_command:
+			args.append(rsh_command)
+		
+		# Main sync flags
+		args.append("--archive")
+		args.append("--delete")
+		
+		# Source path
+		args.append(self.make_rsync_path(self.__source_ssh_host, self.__source_ssh_user, self.__source_path))
+		
+		# Backup path
+		args.append(self.make_rsync_path(self.__backup_ssh_host, self.__backup_ssh_user, self.__backup_path))
+		
+		#
+		print("Executing rsync with the following arguments:")
+		print(args)
+		
+		# Spawn SSH in shell
+		process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		stdout, stderr = process.communicate()
+		
+		#
+		print("Rsync has finished executing")
+		
+		#
+		stdout = stdout.decode()
+		stderr = stderr.decode()
+		
+		# Accept Success (0), and Partial Transfer Codes (23 and 24)
+		if process.returncode not in [0, 23, 24]:
+			raise Exception("Failed to execute Rsync; Exited with code " + str(process.returncode))
+		
+		return stdout, stderr, process.returncode
+	
+	@staticmethod
+	def make_rsync_path(ssh_host, ssh_user, path):
+		
+		rsync_path = ""
+		
+		if (not ssh_host) and ssh_user:
+			raise Exception("ssh_user provided (" + str(ssh_user) + ") without ssh_host")
+		
+		if ssh_user:
+			rsync_path += ssh_user + "@"
+		
+		if ssh_host:
+			rsync_path += ssh_host + ":" + path
+		else:
+			rsync_path += path
+		
+		# Absolute path doesn't have trailing slash, which works well for rsync here
+		rsync_path += "/"
+		
+		return rsync_path
+	
+	@staticmethod
+	def make_rsync_rsh_argument(ssh_key):
+	
+		if not ssh_key:
+			return None
+		
+		if not os.path.isfile(ssh_key):
+			raise Exception("SSH key does not exist: " + str(ssh_key))
+		
+		return "--rsh=ssh -i " + ssh_key
+	
+	def calculate_difference_entries_directly(self):
+		
+		self.calculate_comparison_items()
 		
 		entries = []
 		
@@ -443,6 +698,10 @@ class BackupDiff:
 			"size_difference": {
 				"label": "Items with different file sizes",
 				"entries": []
+			},
+			"unknown": {
+				"label": "Differences of an unknown type",
+				"entries": []
 			}
 		}
 		
@@ -481,6 +740,11 @@ class BackupDiff:
 			if entry.get_is_different_sizes():
 				report["size_difference"]["entries"].append(entry)
 		
+		# Differences of an unknown nature
+		for entry in self.__difference_entries:
+			if entry.get_is_unknown():
+				report["unknown"]["entries"].append(entry)
+		
 		# Sort all entries
 		for section_key in report:
 			self.sort_difference_entries(report[section_key]["entries"])
@@ -515,7 +779,8 @@ class BackupDiff:
 			"missing_from_both",
 			"missing_from_source", "newer_source",
 			"missing_from_backup", "newer_backup",
-			"size_difference"
+			"size_difference",
+			"unknown"
 		]
 		
 		#
@@ -564,6 +829,7 @@ class DifferenceEntry:
 		self.CONST_TYPE_SOURCE_IS_NEWER = "source_is_newer"
 		self.CONST_TYPE_BACKUP_IS_NEWER = "backup_is_newer"
 		self.CONST_TYPE_DIFFERENT_SIZES = "different_sizes"
+		self.CONST_TYPE_UNKNOWN = "unknown"
 		
 		if item:
 			self.set_item(item)
@@ -666,6 +932,13 @@ class DifferenceEntry:
 	
 	def get_is_different_sizes(self):
 		return self.__type == self.CONST_TYPE_DIFFERENT_SIZES
+	
+	def set_is_unknown(self, message):
+		self.__type = self.CONST_TYPE_UNKNOWN
+		self.__message = message
+	
+	def get_is_unknown(self):
+		return self.__type == self.CONST_TYPE_UNKNOWN
 	
 	@staticmethod
 	def friendly_time_difference(stamp1, stamp2):
