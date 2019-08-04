@@ -82,9 +82,13 @@ class BackupDiff:
 	
 	def consume_arguments(self):
 		
-		for i in range(1, len(sys.argv)):
+		i = 0
+		while i < len(sys.argv):
+			
+			i += 1
 			
 			arg = sys.argv[i]
+			# print("I:", i, "; arg:", arg)
 			
 			if arg == "--source-path":
 				i, one_path = self.consume_argument_companion(i)
@@ -128,6 +132,12 @@ class BackupDiff:
 			elif arg == "--no-clean":
 				self.__do_clean_difference_entries = False
 				self.log("Won't clean Difference entries")
+			
+			else:
+				self.log("The heck are you doing?")
+				self.log("Unsupported argument: " + arg)
+				self.log("i is: " + str(i))
+				raise Exception("THE HECK")
 	
 	@staticmethod
 	def consume_argument_companion(arg_index):
@@ -136,7 +146,9 @@ class BackupDiff:
 		if companion_index >= len(sys.argv):
 			raise Exception("Expected argument after", sys.argv[arg_index])
 		
-		return companion_index, sys.argv[companion_index]
+		return_index = companion_index
+		
+		return return_index, sys.argv[companion_index]
 	
 	def calculate_comparison_items(self):
 		
