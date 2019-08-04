@@ -66,13 +66,19 @@ class BackupDiff:
 	
 	def log(self, s, o=None):
 		
-		now = self.current_time()
-		
-		to_log = "[" + now + "][Mike's Backup Diff] " + str(s)
+		to_log = self.make_log_prefix() + str(s)
 		if o is not None:
 			to_log += " " + str(o)
 		
 		print(to_log)
+	
+	def make_log_prefix(self):
+		
+		now = self.current_time()
+		
+		prefix = "[" + now + "][Mike's Backup Diff] "
+		
+		return prefix
 	
 	def consume_arguments(self):
 		
@@ -221,110 +227,136 @@ class BackupDiff:
 		
 		entries = []
 		
-		do_test = False
+		stdout_lines, stderr_lines, return_code = self.execute_rsync()
 		
-		stdout, stderr, return_code = self.execute_rsync()
+		# print("STDOUT LINES:")
+		# print(stdout_lines)
 		
-		print("STDOUT:")
-		print(stdout)
-		
-		#print("STDERR:")
-		#print(stderr)
+		# print("STDERR LINES:")
+		# print(stderr_lines)
 		
 		#
-		print("Calculating difference entries ...")
+		self.log("Calculating difference entries ...")
 		
-		# Parse normal lines (Flags and Path)
-		pattern_general = re.compile("""^(?P<line>(?P<flags>[^\s]{11})(?P<item>.*))$""", re.MULTILINE)
-		matches = pattern_general.finditer(stdout)
-		for match in matches:
-			
-			line = match.group("line")
-			
-			flags = match.group("flags")
-			change_type_character = flags[0]
-			item_type = flags[1]
-			
-			# Determine which attributes are different
-			attributes_part = flags[2:]
-			different_checksum = "c" in attributes_part
-			different_size = "s" in attributes_part
-			different_modification_time = "t" in attributes_part
-			different_permissions = "p" in attributes_part
-			different_owner = "o" in attributes_part
-			different_group = "g" in attributes_part
-			different_acl = "a" in attributes_part
-			different_extended_attributes = "x" in attributes_part
-			#
-			different_any_attribute = (
-				different_checksum
-				or different_size
-				or different_modification_time
-				or different_permissions
-				or different_owner
-				or different_group
-				or different_acl
-				or different_extended_attributes
-			)
-			
-			item = match.group("item").strip()
-			
-			entry = DifferenceEntry(item)
-			
-			# File folder, whatever
-			if item_type == "d":
-				entry.set_is_dir()
-			elif item_type == "f":
-				entry.set_is_file()
-			
-			# Missing from backup
-			if change_type_character == "<":
-				entry.set_is_missing_from_backup()
-			# Missing from ... backup? (confusing symbolstuffs)
-			elif change_type_character == ">":
-				entry.set_is_missing_from_backup()
-			
-			# Local change is occurring
-			elif change_type_character == "c":
-				entry.set_is_missing_from_backup()
-			
-			# Different attributes
-			elif different_any_attribute:
-				entry.set_is_different_attributes()
-			
-			# Item is a hard link
-			elif change_type_character == "h":
-				entry.set_is_unknown("Rsync says this is a hard link")
-			
-			# "no change / transfer (could still be changing attributes)"
-			elif change_type_character == ".":
-				entry.set_is_unknown("Rsync says no change, but could be changing attributes")
-			
-			#
-			entries.append(entry)
+		# Regex patterns
+		pattern_regular = re.compile("""^(?P<line>(?P<flags>[^\s]{11})(?P<item>.*))$""")
+		pattern_message = re.compile("""^(?P<line>\*(?P<message>[\w]+)(?P<item>.*))$""")
 		
-		# Parse message lines
-		pattern_messages = re.compile("""^(?P<line>\*(?P<message>[\w]+)(?P<item>.*))$""", re.MULTILINE)
-		matches = pattern_messages.finditer(stdout)
-		for match in matches:
+		# Iterate over each stdout line
+		for line in stdout_lines:
 			
-			message = match.group("message").strip()
-			item = match.group("item").strip()
+			# Try to match regular expressions
+			match_regular = pattern_regular.match(line)
+			match_message = pattern_message.match(line)
 			
-			entry = DifferenceEntry(item)
+			# Regular line (Flags and Path)
+			if match_regular:
+				
+				flags = match_regular.group("flags")
+				change_type_character = flags[0]
+				item_type = flags[1]
+				
+				# Determine which attributes are different
+				attributes_part = flags[2:]
+				different_checksum = "c" in attributes_part
+				different_size = "s" in attributes_part
+				different_modification_time = "t" in attributes_part
+				different_permissions = "p" in attributes_part
+				different_owner = "o" in attributes_part
+				different_group = "g" in attributes_part
+				different_acl = "a" in attributes_part
+				different_extended_attributes = "x" in attributes_part
+				#
+				different_any_attribute = (
+					different_checksum
+					or different_size
+					or different_modification_time
+					or different_permissions
+					or different_owner
+					or different_group
+					or different_acl
+					or different_extended_attributes
+				)
+				
+				item = match_regular.group("item").strip()
+				
+				entry = DifferenceEntry(item)
+				
+				# File folder, whatever
+				if item_type == "d":
+					entry.set_is_dir()
+				elif item_type == "f":
+					entry.set_is_file()
+				
+				# Different attributes
+				# (before 'missing' stuff, because attribute syncs show up as xfers)
+				if different_checksum:
+					entry.set_is_different_checksum()
+				elif different_size:
+					entry.set_is_different_sizes()
+				elif different_modification_time:
+					entry.set_is_different_modification_times()
+				elif different_permissions:
+					entry.set_is_different_permissions()
+				elif different_owner:
+					entry.set_is_different_owner()
+				elif different_group:
+					entry.set_is_different_group()
+				elif different_acl:
+					entry.set_is_different_acl()
+				elif different_extended_attributes:
+					entry.set_is_different_extended_attributes()
+				elif different_any_attribute:
+					entry.set_is_different_attributes()
+				
+				# Missing from backup
+				elif change_type_character == "<":
+					entry.set_is_missing_from_backup()
+				# Missing from ... backup? (confusing symbolstuffs)
+				elif change_type_character == ">":
+					entry.set_is_missing_from_backup()
+				
+				# Local change is occurring
+				elif change_type_character == "c":
+					entry.set_is_missing_from_backup()
+				
+				# Item is a hard link
+				elif change_type_character == "h":
+					entry.set_is_unknown("Rsync says this is a hard link")
+				
+				# "no change / transfer (could still be changing attributes)"
+				elif change_type_character == ".":
+					entry.set_is_unknown("Rsync says no change, but could be changing attributes")
+				
+				#
+				entries.append(entry)
 			
-			if message == "deleting":
-				entry.set_is_missing_from_source()
-				entry.set_is_dir(item[-1] == "/")
-				entry.set_is_file(not item[-1] == "/")
+			# Message line
+			elif match_message:
 			
+				message = match_message.group("message").strip()
+				item = match_message.group("item").strip()
+				
+				entry = DifferenceEntry(item)
+				
+				if message == "deleting":
+					entry.set_is_missing_from_source()
+					entry.set_is_dir(item[-1] == "/")
+					entry.set_is_file(not item[-1] == "/")
+				
+				else:
+					self.log("IS UNKNOWN MESSAGE:" + message)
+					entry.set_is_unknown("Unhandled message: " + message)
+				
+				entries.append(entry)
+			
+			# Unsupported type of line
 			else:
-				print("IS UNKNOWN MESSAGE:", message)
-				entry.set_is_unknown("Unhandled message: " + message)
+				
+				#
+				self.log("IS UNSUPPORTED LINE:" + line)
 			
-			entries.append(entry)
-		
-		print("Finished calculating difference entries")
+		self.log("Finished calculating difference entries")
 		
 		self.__difference_entries = entries
 	
@@ -358,25 +390,39 @@ class BackupDiff:
 		args.append(self.make_rsync_path(self.__backup_ssh_host, self.__backup_ssh_user, self.__backup_path))
 		
 		#
-		print("Executing rsync with the following arguments:")
-		print(args)
+		self.log("Executing rsync")
+		# self.log("Executing rsync with the following arguments:")
+		# self.log(str(args))
+		# self.log(" ".join(args))
 		
-		# Spawn SSH in shell
+		# Start the subprocess
 		process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		stdout, stderr = process.communicate()
 		
-		#
-		print("Rsync has finished executing")
+		# Live output of stdout
+		print()
+		stdout_lines = []
+		for line in iter(process.stdout.readline, b''):
+			line = line.decode().strip()
+			stdout_lines.append(line)
+			# print(line)
+			self.print_progress_message("Captured " + str(len(stdout_lines)) + " lines from Rsync")
 		
-		#
-		stdout = stdout.decode()
-		stderr = stderr.decode()
+		# Grab all the stderr lines
+		stderr_lines = []
+		for line in iter(process.stderr.readline, b''):
+			line = line.decode().strip()
+			stderr_lines.append(line)
+		
+		# Make sure it's completely finished
+		process.communicate()
+		
+		self.log("Rsync has finished executing")
 		
 		# Accept Success (0), and Partial Transfer Codes (23 and 24)
 		if process.returncode not in [0, 23, 24]:
 			raise Exception("Failed to execute Rsync; Exited with code " + str(process.returncode))
 		
-		return stdout, stderr, process.returncode
+		return stdout_lines, stderr_lines, process.returncode
 	
 	@staticmethod
 	def make_rsync_path(ssh_host, ssh_user, path):
@@ -457,7 +503,7 @@ class BackupDiff:
 		if entries is None:
 			entries = self.__difference_entries
 		
-		self.log("Cleaning difference entries")
+		self.log("Cleaning " + str(len(entries)) + " difference entries")
 		
 		# Build a temp list of all known difference entries
 		temp_entries = []
@@ -467,7 +513,11 @@ class BackupDiff:
 		
 		# Loop through entries, attempting to clean for one at a time,
 		# until no cleaning has been done
+		print()
+		clean_iterations = 0
 		while True:
+			
+			clean_iterations += 1
 			
 			most_shallow_entry = None
 			
@@ -489,11 +539,25 @@ class BackupDiff:
 			
 			# Finish if we haven't found anything
 			if not most_shallow_entry:
+				self.print_progress_message(
+					"Cleaning difference entries; "
+					+ str(clean_iterations) + " iterations; "
+					+ str(len(temp_entries)) + " total"
+				)
 				break
 			
 			# Remove this entry from the temp list, and clean with it as root
 			temp_entries.remove(most_shallow_entry)
+			self.clean_child_difference_entries(temp_entries, most_shallow_entry)
 			self.clean_child_difference_entries(entries, most_shallow_entry)
+			
+			self.print_progress_message(
+				"Cleaning difference entries; "
+				+ str(clean_iterations) + " iterations; "
+				+ str(len(temp_entries)) + " total"
+			)
+			
+		self.__difference_entries = entries
 	
 	def clean_child_difference_entries(self, entries: list, root_entry):
 		
@@ -504,11 +568,20 @@ class BackupDiff:
 		# print(root_entry)
 		
 		root_entry_item = root_entry.get_item()
+		# print("Cleaning child entries for root entry")
+		# print(root_entry)
+		# print()
+		# print()
 		
 		entries_to_delete = []
 		
 		# Check every other entry as a possible child of the root
+		child_iteration = 0
 		for child_entry in entries:
+			
+			child_iteration += 1
+			
+			self.print_progress_message("Looking for child entry to clean " + str(child_iteration))
 			
 			if child_entry != root_entry:
 				
@@ -525,9 +598,20 @@ class BackupDiff:
 						# print("Deleting unneeded child entry:")
 						# print("> Root:", root_entry_item)
 						# print("> Child:", child_entry_item)
+						# print()
+						# print()
 		
 		# Handle entries to delete
+		delete_iteration = 0
 		for entry in entries_to_delete:
+			
+			delete_iteration += 1
+			
+			self.print_progress_message(
+				"Deleting child entry "
+				+ str(delete_iteration) + " / " + str(len(entries_to_delete))
+			)
+			
 			entries.remove(entry)
 		
 		return len(entries_to_delete) > 0
@@ -763,12 +847,14 @@ class BackupDiff:
 		
 		return report
 	
-	@staticmethod
-	def print_progress_message(s):
+	def print_progress_message(self, s):
 		
 		sys.stdout.write("\033[F")  # back to previous line
 		sys.stdout.write("\033[K")  # clear line
-		print(s)
+		
+		to_print = self.make_log_prefix() + s
+		
+		print(to_print)
 	
 	@staticmethod
 	def print_report_heading(s, hooded: bool=False):
@@ -797,6 +883,7 @@ class BackupDiff:
 		]
 		
 		#
+		print()
 		self.print_report_heading("Mike's Backup Diff Report", True)
 		print("Source:", self.__source_path)
 		print("Backup:", self.__backup_path)
@@ -806,6 +893,7 @@ class BackupDiff:
 		for section_key in section_order:
 			if len(report[section_key]["entries"]):
 				found_anything = True
+				print("")
 				self.print_report_heading(report[section_key]["label"])
 				for entry in report[section_key]["entries"]:
 					
@@ -816,12 +904,22 @@ class BackupDiff:
 					else:
 						prefix = ""
 					
-					print(prefix + entry.get_item())
+					message = entry.get_message()
+					if message:
+						suffix = " (" + message + ")"
+					else:
+						suffix = ""
 					
-				print("")
+					print(prefix + entry.get_item() + suffix)
+		
+		# Lil debebuggin'
+		for section_key in report:
+			if section_key not in section_order:
+				raise Exception("Report key " + section_key + " wasn't found in the section_order ... whoopsies")
 		
 		if not found_anything:
-			print("Everything seems to match")
+			print()
+			print("Everything seems to match !")
 
 
 #
@@ -845,6 +943,8 @@ class DifferenceEntry:
 		self.CONST_TYPE_DIFFERENT_ATTRIBUTES = "different_attributes"
 		self.CONST_TYPE_UNKNOWN = "unknown"
 		
+		self.set_is_unknown("DEFAULT MESSAGE")
+		
 		if item:
 			self.set_item(item)
 	
@@ -866,6 +966,12 @@ class DifferenceEntry:
 	def get_item(self):
 		
 		return self.__item
+	
+	def set_message(self, m):
+		self.__message = m
+	
+	def get_message(self):
+		return self.__message
 	
 	def set_is_dir(self, is_dir: bool=True):
 		
@@ -899,14 +1005,14 @@ class DifferenceEntry:
 	def set_is_missing_from_source(self):
 		
 		self.__type = self.CONST_TYPE_MISSING_IN_SOURCE
-		self.__message = "Item is in backup but not in source"
+		self.__message = None
 	
 	def get_is_missing_from_source(self):
 		return self.__type == self.CONST_TYPE_MISSING_IN_SOURCE
 	
 	def set_is_missing_from_backup(self):
 		self.__type = self.CONST_TYPE_MISSING_IN_BACKUP
-		self.__message = "Item is in source but not in backup"
+		self.__message = None
 	
 	def get_is_missing_from_backup(self):
 		return self.__type == self.CONST_TYPE_MISSING_IN_BACKUP
@@ -938,11 +1044,15 @@ class DifferenceEntry:
 	def get_backup_is_newer(self):
 		return self.__type == self.CONST_TYPE_BACKUP_IS_NEWER
 	
-	def set_is_different_sizes(self, source_item_size, backup_item_size):
+	def set_is_different_sizes(self, source_item_size=None, backup_item_size=None):
 		self.__type = self.CONST_TYPE_DIFFERENT_SIZES
-		self.__message = \
-			"Source has a file size of " + str(source_item_size) \
-			+ ", but backup has a file size of " + str(backup_item_size)
+		
+		if source_item_size and backup_item_size:
+			self.__message = \
+				"Source has a file size of " + str(source_item_size) \
+				+ ", but backup has a file size of " + str(backup_item_size)
+		else:
+			self.__message = None
 	
 	def get_is_different_sizes(self):
 		return self.__type == self.CONST_TYPE_DIFFERENT_SIZES
@@ -953,6 +1063,27 @@ class DifferenceEntry:
 	
 	def get_is_different_attributes(self):
 		return self.__type == self.CONST_TYPE_DIFFERENT_ATTRIBUTES
+	
+	def set_is_different_checksum(self):
+		self.set_is_different_attributes("Different checksums")
+	
+	def set_is_different_modification_times(self):
+		self.set_is_different_attributes("Different modification times")
+	
+	def set_is_different_permissions(self):
+		self.set_is_different_attributes("Different permissions")
+	
+	def set_is_different_owner(self):
+		self.set_is_different_attributes("Different owners")
+	
+	def set_is_different_group(self):
+		self.set_is_different_attributes("Different groups")
+	
+	def set_is_different_acl(self):
+		self.set_is_different_attributes("Different ACLs")
+	
+	def set_is_different_extended_attributes(self):
+		self.set_is_different_attributes("Different extended attributes")
 	
 	def set_is_unknown(self, message):
 		self.__type = self.CONST_TYPE_UNKNOWN
