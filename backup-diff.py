@@ -518,9 +518,12 @@ class BackupDiff:
 		self.log("Cleaning " + str(len(entries)) + " difference entries")
 		
 		# Build a temp list of all known difference entries
+		# *that refer to a missing directory*
 		temp_entries = []
 		for entry in entries:
-			temp_entries.append(entry)
+			if entry.get_is_missing_from_source() or entry.get_is_missing_from_backup():
+				if entry.get_is_dir():
+					temp_entries.append(entry)
 		# print("Temp entries count:", len(temp_entries))
 		
 		# Loop through entries, attempting to clean for one at a time,
@@ -554,19 +557,21 @@ class BackupDiff:
 				self.print_progress_message(
 					"Cleaning difference entries; "
 					+ str(clean_iterations) + " iterations; "
-					+ str(len(temp_entries)) + " total"
+					+ str(len(temp_entries)) + " in examination pool; "
+					+ str(len(entries)) + " total"
 				)
 				break
 			
 			# Remove this entry from the temp list, and clean with it as root
 			temp_entries.remove(most_shallow_entry)
-			self.clean_child_difference_entries(temp_entries, most_shallow_entry)
 			self.clean_child_difference_entries(entries, most_shallow_entry)
+			self.clean_child_difference_entries(temp_entries, most_shallow_entry)
 			
 			self.log(
 				"Cleaning difference entries; "
 				+ str(clean_iterations) + " iterations; "
-				+ str(len(temp_entries)) + " total"
+				+ str(len(temp_entries)) + " in examination pool; "
+				+ str(len(entries)) + " total"
 			)
 			
 		self.__difference_entries = entries
