@@ -83,7 +83,7 @@ class BackupDiff:
 	def consume_arguments(self):
 		
 		i = 0
-		while i < len(sys.argv):
+		while i + 1 < len(sys.argv):
 			
 			i += 1
 			
