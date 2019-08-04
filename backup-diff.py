@@ -366,7 +366,7 @@ class BackupDiff:
 			else:
 				
 				#
-				self.log("IS UNSUPPORTED LINE:" + line)
+				self.log("Don't know how to parse this line: " + line)
 			
 		self.log("Finished calculating difference entries")
 		
@@ -563,7 +563,7 @@ class BackupDiff:
 			self.clean_child_difference_entries(temp_entries, most_shallow_entry)
 			self.clean_child_difference_entries(entries, most_shallow_entry)
 			
-			self.print_progress_message(
+			self.log(
 				"Cleaning difference entries; "
 				+ str(clean_iterations) + " iterations; "
 				+ str(len(temp_entries)) + " total"
@@ -588,6 +588,7 @@ class BackupDiff:
 		entries_to_delete = []
 		
 		# Check every other entry as a possible child of the root
+		print("")
 		child_iteration = 0
 		for child_entry in entries:
 			
@@ -614,6 +615,7 @@ class BackupDiff:
 						# print()
 		
 		# Handle entries to delete
+		print("")
 		delete_iteration = 0
 		for entry in entries_to_delete:
 			
